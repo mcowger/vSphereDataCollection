@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+    <form id="userinfo" class="form-horizontal" action="#">
+        <fieldset>
+
+            <!-- Form Name -->
+            <legend>vSphere Environment Information</legend>
+
+            <!-- Text input-->
+            <div class="control-group">
+                <label class="control-label" for="vcenter">vCenter IP/Hostname</label>
+
+                <div class="controls">
+                    <input id="vcenter" name="vcenter" type="text" placeholder="192.168.0.1" class="input-xlarge"
+                           required="">
+
+                    <p class="help-block">Enter Your vCenter IP or Hostname here</p>
+                </div>
+            </div>
+
+            <!-- Text input-->
+            <div class="control-group">
+                <label class="control-label" for="username">Username</label>
+
+                <div class="controls">
+                    <input id="username" name="username" type="text" placeholder="username" class="input-xlarge"
+                           required="">
+
+                    <p class="help-block">Use the same username you use to login to the web client. Requires admin
+                        privileges</p>
+                </div>
+            </div>
+
+            <!-- Password input-->
+            <div class="control-group">
+                <label class="control-label" for="password">Password</label>
+
+                <div class="controls">
+                    <input id="password" name="password" type="password" placeholder="" class="input-xlarge"
+                           required="">
+
+                    <p class="help-block">Password for the above user</p>
+                </div>
+            </div>
+
+            <!-- Button -->
+            <div class="control-group">
+                <label class="control-label" for="go"></label>
+
+                <div class="controls">
+                    <button type="submit" id="go" name="go" class="btn btn-primary" onsubmit="">Check Credentials &amp; Get Hosts</button>
+                </div>
+            </div>
+
+        </fieldset>
+    </form>
+
+    <div id="hostlist" class="hide">
+        <form class="form-horizontal">
+            <fieldset>
+                <!-- Form Name -->
+                <legend>Hosts Discovered</legend>
+                <!-- Multiple Checkboxes -->
+                <div class="control-group">
+                    <label class="control-label" for="checkboxes">Select Hosts for Collection</label>
+                    <div class="controls" id="elements">
+
+
+
+                    </div>
+                </div>
+
+            </fieldset>
+        </form>
+
+
+    </div>
+
+<script>
+$("#userinfo").submit(
+        function(e) {
+            thedata = {};
+            thedata.host = $('#vcenter').val();
+            thedata.user = $('#username').val();
+            thedata.password = $('#password').val();
+            //console.log(thedata);
+            $.cookie('vspheredatacollection', thedata, { expires: 180 });
+
+            $.getJSON(
+                    "/getentities/HostSystem",
+                    function (data, textStatus, jqXHR) {
+                        $('#hostlist').removeClass("hide");
+                        $.each(data.result, function (index,item) {
+                            //$('#elements').add("label").addClass("checkbox").attr("for",item);
+                            $('#elements').append('<label id="label-' + item.replace(/\./g, '-') + '" class="checkbox" for="' + item + '"></label>');
+
+                            $('#label-' + item.replace(/\./g, '-')).append('<input type="checkbox" name="checkboxes" id="' +item+ '" value="'+ item + '">');
+                            $('#label-' + item.replace(/\./g, '-')).append(item);
+
+                            console.log(item);
+
+                        });
+                    }
+            );
+        }
+
+);
+
+
+
+</script>
+{% endblock %}
