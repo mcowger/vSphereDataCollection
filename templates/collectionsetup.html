@@ -2,73 +2,61 @@
 
 {% block content %}
 
-    <form id="userinfo" class="form-horizontal" action="#">
-        <fieldset>
 
-            <!-- Form Name -->
-            <legend>vSphere Environment Information</legend>
 
-            <!-- Text input-->
-            <div class="control-group">
-                <label class="control-label" for="vcenter">vCenter IP/Hostname</label>
 
-                <div class="controls">
-                    <input id="vcenter" name="vcenter" type="text" placeholder="192.168.0.1" class="input-xlarge"
-                           required="">
 
-                    <p class="help-block">Enter Your vCenter IP or Hostname here</p>
-                </div>
-            </div>
+    <div class="col-md-7">
 
-            <!-- Text input-->
-            <div class="control-group">
-                <label class="control-label" for="username">Username</label>
-
-                <div class="controls">
-                    <input id="username" name="username" type="text" placeholder="username" class="input-xlarge"
-                           required="">
-
-                    <p class="help-block">Use the same username you use to login to the web client. Requires admin
-                        privileges</p>
-                </div>
-            </div>
-
-            <!-- Password input-->
-            <div class="control-group">
-                <label class="control-label" for="password">Password</label>
-
-                <div class="controls">
-                    <input id="password" name="password" type="password" placeholder="" class="input-xlarge"
-                           required="">
-
-                    <p class="help-block">Password for the above user</p>
-                </div>
-            </div>
-
-            <!-- Button -->
-            <div class="control-group">
-                <label class="control-label" for="go"></label>
-
-                <div class="controls">
-                    <button type="submit" id="go" name="go" class="btn btn-primary" onsubmit="">Check Credentials &amp; Get Hosts</button>
-                </div>
-            </div>
-
-        </fieldset>
-    </form>
-
-    <div id="hostlist" class="hide">
-        <form class="form-horizontal">
+        <form id="userinfo" class="form-horizontal" action="#">
             <fieldset>
+
                 <!-- Form Name -->
-                <legend>Hosts Discovered</legend>
-                <!-- Multiple Checkboxes -->
+                <legend>vSphere Environment Information</legend>
+
+                <!-- Text input-->
                 <div class="control-group">
-                    <label class="control-label" for="checkboxes">Select Hosts for Collection</label>
-                    <div class="controls" id="elements">
+                    <label class="control-label" for="vcenter">vCenter IP/Hostname</label>
 
+                    <div class="controls">
+                        <input id="vcenter" name="vcenter" type="text" placeholder="192.168.0.1" class="input-xlarge"
+                               required="">
 
+                        <p class="help-block">Enter Your vCenter IP or Hostname here</p>
+                    </div>
+                </div>
 
+                <!-- Text input-->
+                <div class="control-group">
+                    <label class="control-label" for="username">Username</label>
+
+                    <div class="controls">
+                        <input id="username" name="username" type="text" placeholder="username" class="input-xlarge"
+                               required="">
+
+                        <p class="help-block">Use the same username you use to login to the web client. Requires admin
+                            privileges</p>
+                    </div>
+                </div>
+
+                <!-- Password input-->
+                <div class="control-group">
+                    <label class="control-label" for="password">Password</label>
+
+                    <div class="controls">
+                        <input id="password" name="password" type="password" placeholder="" class="input-xlarge"
+                               required="">
+
+                        <p class="help-block">Password for the above user</p>
+                    </div>
+                </div>
+
+                <!-- Button -->
+                <div class="control-group">
+                    <label class="control-label" for="go"></label>
+
+                    <div class="controls">
+                        <button type="submit" id="go" name="go" class="btn btn-primary" onsubmit="">Check Credentials &amp; Get Hosts</button>
                     </div>
                 </div>
 
@@ -77,10 +65,67 @@
 
 
     </div>
+    <div class="col-md-5">
+        <div id="hostlist" class="hide">
+            <form class="form-horizontal">
+                <fieldset>
+                    <!-- Form Name -->
+                    <legend>Hosts Discovered</legend>
+                    <!-- Multiple Checkboxes -->
+                    <div class="control-group">
+                        <label class="control-label" for="checkboxes">Select Hosts for Collection</label>
+                        <div class="controls" id="elements">
+
+
+                        </div>
+                    </div>
+                    <div class="control-group">
+                        <label class="control-label" for="go"></label>
+                        <div class="controls">
+                            <button type="submit" id="collect" name="collect" class="btn btn-primary" onsubmit="">Begin Collection
+                            </button>
+                        </div>
+                    </div>
+
+                </fieldset>
+            </form>
+
+
+        </div>
+    </div>
+
 
 <script>
+
+
+//On document load, check for existing cookies, make sure they are valid, and if they are, load them into the form
+
+$(document).ready(function() {
+    var cookie = $.cookie('vspheredatacollection');
+    if (typeof cookie != 'undefined') {
+        //We have a valid cookie - lets try ot load it.
+        if ('host' in cookie && 'user' in cookie && 'password' in cookie) {
+            //Yup, that cookie looks clean!
+            $('#vcenter').val(cookie.host);
+            $('#username').val(cookie.user);
+            $('#password').val(cookie.password);
+            console.log("Loaded existing authentiation information" + cookie);
+        }
+        else {
+            console.log("Incorrect format cookie found - deleting: " + cookie);
+            $.removeCookie('vspheredatacollection');
+        }
+    }
+});
+
+
+//When the user submits the authentication information, got get the data from the host via a JSON query
+
 $("#userinfo").submit(
         function(e) {
+            e.preventDefault();
+            $('#go').text("Collecting Host Information...");
+            $('#go').attr("disabled","disabled");
             thedata = {};
             thedata.host = $('#vcenter').val();
             thedata.user = $('#username').val();
@@ -88,25 +133,51 @@ $("#userinfo").submit(
             //console.log(thedata);
             $.cookie('vspheredatacollection', thedata, { expires: 180 });
 
+            $('#elements').empty();
             $.getJSON(
                     "/getentities/HostSystem",
                     function (data, textStatus, jqXHR) {
+
+                        thisLabel = $('<label>').attr("for", "selectall").addClass("checkbox");
+                        thisFormElement = $('<input>').attr({
+                            "type": "checkbox",
+                            "name": "checkboxes",
+                            "id": "selectall",
+                        });
+                        thisFormElement.appendTo('#elements');
+                        thisLabel.text("Select All");
+                        thisFormElement.wrap(thisLabel);
+
                         $('#hostlist').removeClass("hide");
                         $.each(data.result, function (index,item) {
-                            //$('#elements').add("label").addClass("checkbox").attr("for",item);
-                            $('#elements').append('<label id="label-' + item.replace(/\./g, '-') + '" class="checkbox" for="' + item + '"></label>');
-
-                            $('#label-' + item.replace(/\./g, '-')).append('<input type="checkbox" name="checkboxes" id="' +item+ '" value="'+ item + '">');
-                            $('#label-' + item.replace(/\./g, '-')).append(item);
-
                             console.log(item);
+                            thisFormElement = $('<input>').attr({
+                                "type":"checkbox",
+                                "name":"checkboxes",
+                                "id":item.replace(/\./g,'-'),
+                                "value":item
+                            });
+                            thisLabel = $('<label>').attr("for", item.replace(/\./g, '-') ).addClass("checkbox");
+                            thisFormElement.appendTo('#elements');
+                            thisLabel.text(item);
+                            thisFormElement.wrap(thisLabel);
 
                         });
+                        $('#go').text("Done");
+
+                        $('#selectall').change(function (status) {
+                            $(':checkbox').attr('checked', status);
+                        });
+
+
                     }
             );
+
         }
 
 );
+
+//Automatically create a 'Select All' button for the host list.
 
 
 
