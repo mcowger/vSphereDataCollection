@@ -16,7 +16,7 @@ from apscheduler.jobstores.redis_store import RedisJobStore
 import atexit
 import datetime
 
-#logging.config.fileConfig("%s/%s" % (os.getcwd(), "logcfg.cfg"))
+logging.basicConfig(filename='debug.log', level=logging.DEBUG, format="%(asctime)s|%(name)s|%(levelname)s|%(module)s:%(lineno)d|%(message)s")
 logger = logging.getLogger()
 
 r = StrictRedis()
@@ -43,6 +43,7 @@ try:
     os.remove(config.get_config('data_dir') + '/vsphereinventory')
 
 except Exception, e:  ## if failed, report it back to the user ##
+
      pass
 
 try:

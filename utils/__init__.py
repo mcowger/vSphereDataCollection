@@ -15,7 +15,7 @@ import logging
 from redis import StrictRedis
 from RedisConfigHelper import RedisConfigHelper
 from apscheduler.scheduler import Scheduler
-from pprint import pformat
+from pprint import pformat,pprint
 import jsonpickle
 
 
@@ -265,22 +265,14 @@ def get_metrics_for_entity(entity, intervalId=20, endTime=None, beginTime=5):
     return pm.QueryAvailablePerfMetric(entity=entity, intervalId=intervalId, endTime=endTime, beginTime=beginTime)
 
 def writedata(datadict,data_dir):
-    bar = Bar("Compressing\t", max=1)
-    with gzip.open(data_dir+ '/vspheredatacollection.data.gz','a') as output:
-        # json.dump(datadict, output,
-        #     sort_keys = True,
-        #     indent = 4,
-        #     separators = (',', ': '),
-        # )
 
-        xml = json2xml(
-            json.loads(
-                json.dumps(datadict,sort_keys=True)
-            )
-        )
-        output.write(xml)
-    bar.next()
-    bar.finish()
+    with gzip.open(data_dir+ '/vspheredatacollection.data.gz','w') as output:
+        for timestamp in datadict.keys():
+            bar = Bar("Compressing\t", max=len(datadict[timestamp]))
+            for line in datadict[timestamp]:
+                output.write("\"%s\",\"%s\",\"%s\",%s\n" % (timestamp,line['entity'],line['metric'],line['value']))
+                bar.next()
+            bar.finish()
 
 def extract_headers(datadict):
     headers = ['timestamp']
