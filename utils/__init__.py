@@ -2,38 +2,166 @@ __author__ = 'mcowger'
 
 from itertools import chain
 from itertools import izip_longest
+import datetime
+import json
+import gzip
 
 from pyVim.connect import SmartConnect, Disconnect
-
 import pyVmomi
 from pyVmomi import vim
-import logging
-import os
-import datetime
 from progress.bar import Bar
-import json
-from pprint import pprint, pformat
+from RedisConfigHelper import RedisConfigHelper
+import logging
+from redis import StrictRedis
+from RedisConfigHelper import RedisConfigHelper
+from apscheduler.scheduler import Scheduler
+from pprint import pformat
+import jsonpickle
+
+
 
 si = None
 pm = None
-
+r = None
 allCounters = None
 
 
 logger = logging.getLogger(__name__)
 
+
+
 relevant_metrics = ['datastore', 'virtualDisk', 'disk', 'cpu', 'mem']
 
 _all_objects = {}
 
+config = RedisConfigHelper()
 
 
+
+
+
+class MyJSONEncoder(json.JSONEncoder):
+    """A custom JSONEncoder class that knows how to encode core custom
+    objects.
+
+    Custom objects are encoded as JSON object literals (ie, dicts) with
+    one key, '__TypeName__' where 'TypeName' is the actual name of the
+    type to which the object belongs.  That single key maps to another
+    object literal which is just the __dict__ of the object encoded."""
+
+    def default(self, obj):
+        try:
+            # Check for basic type
+            return super(MyJSONEncoder, self).default(obj)
+
+        except TypeError:
+
+
+            if type(obj) in (vim.Network.Summary,
+                vim.Datastore.Summary,
+                vim.ClusterComputeResource.Summary,
+                vim.host.Summary,
+                vim.host.Summary.HardwareSummary,
+                vim.host.Summary.ConfigSummary,
+                vim.Network,
+                vim.AboutInfo,
+                vim.vm.Summary,
+                vim.vm.Summary.ConfigSummary,
+                vim.vm.Summary.StorageSummary,
+                vim.vm.Summary.GuestSummary,
+                vim.Datastore,
+                vim.vm.RuntimeInfo,
+                vim.vm.DeviceRuntimeInfo):
+                return obj.__dict__
+            # For anything else
+            return "__{}__".format(obj.__class__.__name__)
+
+
+def json2xml(json_obj, line_padding=""):
+    result_list = list()
+
+    json_obj_type = type(json_obj)
+
+    if json_obj_type is list:
+        for sub_elem in json_obj:
+            result_list.append(json2xml(sub_elem, line_padding))
+
+        return "\n".join(result_list)
+
+    if json_obj_type is dict:
+        for tag_name in json_obj:
+            sub_obj = json_obj[tag_name]
+            result_list.append("%s<%s>" % (line_padding, tag_name))
+            result_list.append(json2xml(sub_obj, "\t" + line_padding))
+            result_list.append("%s</%s>" % (line_padding, tag_name))
+
+        return "\n".join(result_list)
+
+    return "%s%s" % (line_padding, json_obj)
+
+
+
+def collect_and_write_inventory():
+    config = RedisConfigHelper()
+    r = StrictRedis()
+    connect(
+        host=config.get_config('vcenter_host'),
+        user=config.get_config('vcenter_user'),
+        pwd=config.get_config('vcenter_pwd')
+    )
+
+    inventory = {}
+    inventory['vm'] = [item.summary for item in _all_objects['vim.VirtualMachine']]
+    inventory['host'] = [item.summary for item in _all_objects['vim.HostSystem']]
+    inventory['cluster'] = [item.summary for item in _all_objects['vim.ClusterComputeResource']]
+    #inventory['datacenter'] = [item.summary for item in _all_objects['vim.Datacenter']]
+    #inventory['folder'] = [item.summary for item in _all_objects['vim.Folder']]
+    inventory['network'] = [item.summary for item in _all_objects['vim.Network']]
+    inventory['datastore'] = [item.summary for item in _all_objects['vim.Datastore']]
+
+
+    with gzip.open(config.get_config('data_dir')+ '/vsphereinventory.gz','w') as output:
+        jsondata = json.loads(
+            json.dumps(inventory, cls=MyJSONEncoder, indent=4)
+        )
+        #output.write(json.dumps(inventory, cls=MyJSONEncoder, indent=4))
+        #print json2xml(jsondata)
+        #output.write(json.dumps(inventory,cls=MyJSONEncoder,indent=4))
+        #print json2xml(json.dumps(inventory, cls=MyJSONEncoder, indent=4))
+        output.write(json2xml(jsondata).encode('ascii','ignore'))
+
+    si = None
+    pm = None
+    r = None
+    allCounters = None
+
+
+
+def collect_and_write_data(objtype,limit=None):
+    config = RedisConfigHelper()
+    r = StrictRedis()
+    connect(
+        host=config.get_config('vcenter_host'),
+        user=config.get_config('vcenter_user'),
+        pwd=config.get_config('vcenter_pwd')
+    )
+    query_specs = build_perf_request_for_type(objtype, limit)
+    results = get_perf(query_specs)
+    datadict = build_datasets_from_results(results)
+    writedata(datadict, config.get_config('data_dir'))
+    r.incr("runs_completed")
+    si = None
+    pm = None
+    r = None
+    allCounters = None
+
+    #return "Task %s completed" % task_id
 
 
 def get_perf(query_specs,group_size=10):
 
 
-    bar = Bar('Collecting\t', suffix='%(percent)d%% ETA: %(eta)ds ', max=len(query_specs) / group_size)
+    bar = Bar('Collecting\t', suffix='>%(percent)d%% ETA: %(eta)ds ', max=len(query_specs) / group_size)
     logger.info("Submitting %s requests in groups of %d" % (len(query_specs),group_size))
     results = []
     group_count = 0
@@ -52,7 +180,7 @@ def get_perf(query_specs,group_size=10):
 def build_perf_request_for_type(obj_type,limit=None):
     query_specs = []
     entities = get_objects_by_type(obj_type)
-    bar = Bar('Inventory\t', suffix='%(percent)d%% ETA: %(eta)ds ', max=len(entities))
+    bar = Bar('Inventory\t', suffix='>%(percent)d%% ETA: %(eta)ds ', max=len(entities))
 
     runcount = 0
     for entity in entities:
@@ -66,31 +194,28 @@ def build_perf_request_for_type(obj_type,limit=None):
 
 def build_datasets_from_results(results):
     all_data = {}
-    bar = Bar('Processing Data\t', suffix='%(percent)d%% ETA: %(eta)ds ', max=len(results))
+    bar = Bar('Processing Data\t', suffix='>%(percent)d%% ETA: %(eta)ds ', max=len(results))
     for entity_result in results:
-        #The 'entity_result' in this case is a EntityMetricCSV object
-        #logger.debug(entity_result)
-        #requestintervalstart, start, requestintervalend, end = entity_result.sampleInfoCSV.split(",")
-        logger.debug("Processng result from entity: %s" % entity_result.entity.name)
+
+        logger.debug("Processing result from entity: %s" % entity_result.entity.name)
 
         trash,timestamp = entity_result.sampleInfoCSV.split(',')
         if not all_data.has_key(timestamp): all_data[timestamp] = []
         bar.next()
 
+        resultbar = Bar('Processing Entity Results: ' + entity_result.entity.name + '\t\t', suffix='%(percent)d%% ETA: %(eta)ds ', max=len(entity_result.value))
         for result in entity_result.value:
-
-
             counterId = result.id.counterId
             counterInfo = [x for x in allCounters if x.key == counterId][0]
             combined_name = ".".join([counterInfo.groupInfo.key, counterInfo.nameInfo.key, result.id.instance]).rstrip('.')
             value = result.value
             all_data[timestamp].append({'entity':entity_result.entity.name, 'metric':combined_name,'value':value})
-
+            resultbar.next()
 
             #logger.debug("%s = %s" % (combined_name,value))
             #logger.debug(value)
-            #logger.debug("Entity %s:counterId:%d:%s.%s.%s = %s" % (entity_result.entity.name, counterId,counterInfo.groupInfo.key,counterInfo.nameInfo.key, instance, value) )
-
+            logger.debug("Entity %s:%s = %s" % (entity_result.entity.name,combined_name, value) )
+        resultbar.finish()
 
     bar.finish()
     return all_data
@@ -109,7 +234,7 @@ def build_query_spec_for_entity(entity):
     query_spec = vim.PerfQuerySpec()
     query_spec.entity = entity
     #query_spec.endTime = si.serverClock
-    #query_spec.startTime = (si.serverClock - datetime.timedelta(minutes=60))
+    query_spec.startTime = (si.serverClock - datetime.timedelta(minutes=10))
     query_spec.intervalId = 20
     query_spec.maxSample = 1
     query_spec.format = "csv"
@@ -140,13 +265,22 @@ def get_metrics_for_entity(entity, intervalId=20, endTime=None, beginTime=5):
     return pm.QueryAvailablePerfMetric(entity=entity, intervalId=intervalId, endTime=endTime, beginTime=beginTime)
 
 def writedata(datadict,data_dir):
-    with open(data_dir+ '/' + '.csv','wb') as output:
-        json.dump(datadict, output,
-            sort_keys = True,
-            indent = 4,
-            separators = (',', ': '),
+    bar = Bar("Compressing\t", max=1)
+    with gzip.open(data_dir+ '/vspheredatacollection.data.gz','a') as output:
+        # json.dump(datadict, output,
+        #     sort_keys = True,
+        #     indent = 4,
+        #     separators = (',', ': '),
+        # )
+
+        xml = json2xml(
+            json.loads(
+                json.dumps(datadict,sort_keys=True)
+            )
         )
-        #write.writerows(datadict)
+        output.write(xml)
+    bar.next()
+    bar.finish()
 
 def extract_headers(datadict):
     headers = ['timestamp']
@@ -161,14 +295,16 @@ def connect(*args, **kwargs):
     global si
     global pm
     global allCounters
-
+    global r
     if si is None:
         si = SmartConnect(*args, **kwargs)
     if pm is None:
         pm = si.content.perfManager
     logger.info("Evaluating object tree")
+    logger.debug(si.content.rootFolder)
     get_subs(si.content.rootFolder)
     allCounters = pm.perfCounter
+    r = StrictRedis()
 
 def disconnect():
     logger.info("Disconnecting from vCenter host")
@@ -180,15 +316,18 @@ def disconnect():
 def get_subs(thething, level=0):
     if level == 0:
         _all_objects.clear()
+        logger.debug("Cleared all objects at level: %d" % level)
         #print "cleared all objects"
     if type(thething).__name__ not in _all_objects.keys():
         _all_objects[type(thething).__name__] = []
+        logger.debug("Created new key in all objects called %s" % type(thething).__name__)
         #print "added key " + type(thething).__name__
 
     # if we have a datacenter object, there are specific subobjects
     if type(thething) is pyVmomi.types.vim.Datacenter:
         #print "added datacenter"
         _all_objects[type(thething).__name__].append(thething)
+        logger.debug("Added datacenter %s" % thething)
         for sub in [thething.hostFolder, thething.networkFolder, thething.vmFolder]:
             get_subs(sub, level=level + 1)
 
@@ -196,24 +335,28 @@ def get_subs(thething, level=0):
     elif type(thething) in [pyVmomi.types.vim.Folder, pyVmomi.types.vim.ResourcePool]:
         #print "added folder or RP " + thething.name
         _all_objects[type(thething).__name__].append(thething)
+        logger.debug("Added object: %s" % thething)
         for sub in thething.childEntity:
             get_subs(sub, level=level + 1)
     #If we have a compute resource (either a DRS cluster or a single host), lets get its bits:
     elif type(thething) in [pyVmomi.types.vim.ComputeResource, pyVmomi.types.vim.ClusterComputeResource]:
         #print "added cluster or host " + thething.name
         _all_objects[type(thething).__name__].append(thething)
+        logger.debug("Added object %s" % thething)
         for elem in chain.from_iterable([thething.host, thething.network, thething.datastore]):
             get_subs(elem, level=level + 1)
 
     elif type(thething) in [pyVmomi.types.vim.ResourcePool]:
         #print "added RP " + thething.name
         _all_objects[type(thething).__name__].append(thething)
+        logger.debug("Added object %s" % thething)
         for elem in chain.from_iterable([thething.resourcePool, thething.vm]):
             get_subs(elem, level=level + 1)
 
     else:
         #print "added entity " + thething.name
         _all_objects[type(thething).__name__].append(thething)
+        logger.debug("Added object %s" % thething)
 
     return _all_objects
 

@@ -6,9 +6,9 @@
 
 
 
-    <div class="col-md-7">
+    <div class="col-md-12">
 
-        <form id="userinfo" class="form-horizontal" action="#">
+        <form id="userinfo" class="form-horizontal" action="/pushconfig" method="POST">
             <fieldset>
 
                 <!-- Form Name -->
@@ -51,6 +51,29 @@
                     </div>
                 </div>
 
+
+                <div class="control-group">
+                    <label class="control-label" for="interval">Interval (s)</label>
+
+                    <div class="controls">
+                        <input id="interval" name="interval" type="text" placeholder="300" value="300" class="input-xlarge"
+                               required="">
+
+                        <p class="help-block">Interval to collect data (recommend 300s, aka 5 minutes)</p>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label class="control-label" for="count">Run Count</label>
+
+                    <div class="controls">
+                        <input id="runcount" name="runcount" type="text" placeholder="288" value="288"
+                               class="input-xlarge"
+                               required="">
+
+                        <p class="help-block"># of Runs</p>
+                    </div>
+                </div>
+
                 <!-- Button -->
                 <div class="control-group">
                     <label class="control-label" for="go"></label>
@@ -65,121 +88,9 @@
 
 
     </div>
-    <div class="col-md-5">
-        <div id="hostlist" class="hide">
-            <form class="form-horizontal">
-                <fieldset>
-                    <!-- Form Name -->
-                    <legend>Hosts Discovered</legend>
-                    <!-- Multiple Checkboxes -->
-                    <div class="control-group">
-                        <label class="control-label" for="checkboxes">Select Hosts for Collection</label>
-                        <div class="controls" id="elements">
-
-
-                        </div>
-                    </div>
-                    <div class="control-group">
-                        <label class="control-label" for="go"></label>
-                        <div class="controls">
-                            <button type="submit" id="collect" name="collect" class="btn btn-primary" onsubmit="">Begin Collection
-                            </button>
-                        </div>
-                    </div>
-
-                </fieldset>
-            </form>
-
-
-        </div>
-    </div>
 
 
 <script>
 
 
-//On document load, check for existing cookies, make sure they are valid, and if they are, load them into the form
-
-$(document).ready(function() {
-    var cookie = $.cookie('vspheredatacollection');
-    if (typeof cookie != 'undefined') {
-        //We have a valid cookie - lets try ot load it.
-        if ('host' in cookie && 'user' in cookie && 'password' in cookie) {
-            //Yup, that cookie looks clean!
-            $('#vcenter').val(cookie.host);
-            $('#username').val(cookie.user);
-            $('#password').val(cookie.password);
-            console.log("Loaded existing authentiation information" + cookie);
-        }
-        else {
-            console.log("Incorrect format cookie found - deleting: " + cookie);
-            $.removeCookie('vspheredatacollection');
-        }
-    }
-});
-
-
-//When the user submits the authentication information, got get the data from the host via a JSON query
-
-$("#userinfo").submit(
-        function(e) {
-            e.preventDefault();
-            $('#go').text("Collecting Host Information...");
-            $('#go').attr("disabled","disabled");
-            thedata = {};
-            thedata.host = $('#vcenter').val();
-            thedata.user = $('#username').val();
-            thedata.password = $('#password').val();
-            //console.log(thedata);
-            $.cookie('vspheredatacollection', thedata, { expires: 180 });
-
-            $('#elements').empty();
-            $.getJSON(
-                    "/getentities/HostSystem",
-                    function (data, textStatus, jqXHR) {
-
-                        thisLabel = $('<label>').attr("for", "selectall").addClass("checkbox");
-                        thisFormElement = $('<input>').attr({
-                            "type": "checkbox",
-                            "name": "checkboxes",
-                            "id": "selectall",
-                        });
-                        thisFormElement.appendTo('#elements');
-                        thisLabel.text("Select All");
-                        thisFormElement.wrap(thisLabel);
-
-                        $('#hostlist').removeClass("hide");
-                        $.each(data.result, function (index,item) {
-                            console.log(item);
-                            thisFormElement = $('<input>').attr({
-                                "type":"checkbox",
-                                "name":"checkboxes",
-                                "id":item.replace(/\./g,'-'),
-                                "value":item
-                            });
-                            thisLabel = $('<label>').attr("for", item.replace(/\./g, '-') ).addClass("checkbox");
-                            thisFormElement.appendTo('#elements');
-                            thisLabel.text(item);
-                            thisFormElement.wrap(thisLabel);
-
-                        });
-                        $('#go').text("Done");
-
-                        $('#selectall').change(function (status) {
-                            $(':checkbox').attr('checked', status);
-                        });
-
-
-                    }
-            );
-
-        }
-
-);
-
-//Automatically create a 'Select All' button for the host list.
-
-
-
-</script>
 {% endblock %}

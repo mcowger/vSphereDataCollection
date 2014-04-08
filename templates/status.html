@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+    <div class="jumbotron">
+        <h1>vSphere Data Collection Appliance</h1>
+
+
+        <b>Performance Runs Completed:</b><br/>
+        <ul>
+            <li>{{ runs }} / {{ runs_target }}</li>
+
+        </ul>
+
+
+        <b>Job List:</b><br/>
+    <ul>
+        {%for job in jobs%}
+                 <li>   {{ job }}</li>
+        {% endfor %}
+    </ul>
+
+        <b>Data File Info:</b><br/>
+    <ul>
+        <li>{{ datafile_name }}: {{ datafile_size }} (Estimate = {{ perf_estimate }})</li>
+        <li>{{ inventory_name }}: {{ inventory_size }}</li>
+    </ul>
+        <p><a class="btn btn-lg btn-success" href="javascript:location.reload();" role="button">Reload</a></p>
+    </div>
+
+{% endblock %}
