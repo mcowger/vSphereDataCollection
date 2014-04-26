@@ -1,56 +1,51 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for
-from pyVim.connect import SmartConnect, Disconnect
-from pyVmomi import vmodl
-import pyVmomi
+
 import utils
-from pprint import pformat
-import json
-from urllib import unquote
-import traceback
-from RedisConfigHelper import RedisConfigHelper
+
 import os
 import logging, logging.config
-from redis import StrictRedis
+
 from apscheduler.scheduler import Scheduler
-from apscheduler.jobstores.redis_store import RedisJobStore
+
 import atexit
 import datetime
+import shelve
+import logging_tree
 
-logging.basicConfig(filename='debug.log', level=logging.DEBUG, format="%(asctime)s|%(name)s|%(levelname)s|%(module)s:%(lineno)d|%(message)s")
+import config
+
+
+logging.config.dictConfig(config.loggingconfig)
 logger = logging.getLogger()
 
-r = StrictRedis()
-logger.info("Deleting all job keys")
-for key_name in r.keys("jobs.*"):
-    r.delete(key_name)
+#logging_tree.printout(node=None)
 
-logger.info("Resetting Run Count")
-r.set("runs_completed","0")
+
+
 
 sched = Scheduler()
-sched.add_jobstore(RedisJobStore(), 'redis')
 sched.start()
 atexit.register(lambda: sched.shutdown(wait=False,close_jobstores=True,))
 
+
+
+
 ## try to delete file ##
 
-
-
-config = RedisConfigHelper()
-
-try:
-    os.remove(config.get_config('data_dir') + '/vsphereinventory.gz')
-    os.remove(config.get_config('data_dir') + '/vsphereinventory')
-
-except Exception, e:  ## if failed, report it back to the user ##
-
-     pass
-
-try:
-    os.remove(config.get_config('data_dir') + '/vspheredatacollection.data.gz')
-
-except Exception, e:  ## if failed, report it back to the user ##
-    pass
+#
+# try:
+#     os.remove(config.get_config('data_dir') + '/vsphereinventory.gz')
+#     os.remove(config.get_config('data_dir') + '/vsphereinventory')
+#
+# except Exception, e:  ## if failed, report it back to the user ##
+#
+#      pass
+#
+# try:
+#     os.remove(config.get_config('data_dir') + '/vspheredatacollection.data.gz')
+#
+# except Exception, e:  ## if failed, report it back to the user ##
+#     pass
 
 
 
@@ -63,8 +58,10 @@ def index():
 
 @app.route('/status', methods=['GET'])
 def status():
-    perf_filename = config.get_config('data_dir') + '/vspheredatacollection.data.gz'
-    inv_filename = config.get_config('data_dir') + '/vsphereinventory.gz'
+    liveconfig = shelve.open(config.systemconfig['live_config_file'], writeback=True)
+    perf_filename = liveconfig['data_dir'] + '/vspheredatacollection.data.gz'
+    inv_filename = liveconfig['data_dir'] + '/vsphereinventory.gz'
+    debug_filename = "./debug.log"
 
     perf_size = 0
     inv_size = 0
@@ -72,12 +69,17 @@ def status():
     try:
         perf_size = os.path.getsize(perf_filename)
     except:
-        pass
+        perf_size = "NotFound"
 
     try:
         inv_size = os.path.getsize(inv_filename)
     except:
-        pass
+        inv_size = "NotFound"
+
+    try:
+        debug_size = sizeof_fmt(os.path.getsize(debug_filename))
+    except:
+        debug_size = "NotFound"
 
     perf_estimate = 0
     try:
@@ -85,51 +87,68 @@ def status():
     except:
         pass
 
+
     return render_template('status.html',
                            jobs=sched.get_jobs(),
                            datafile_name=perf_filename,
                            datafile_size=sizeof_fmt(perf_size),
                            inventory_name=inv_filename,
                            inventory_size=sizeof_fmt(inv_size),
-                           runs = r.get("runs_completed"),
-                           runs_target = config.get_config('run_count'),
+                           debug_name=debug_filename,
+                           debug_size=debug_size,
+                           runs = liveconfig['runs_completed'],
+                           runs_target = liveconfig['run_count'],
                            perf_estimate = sizeof_fmt(perf_estimate)
 
     )
+    liveconfig.close()
 
 @app.route('/inventory', methods=['GET'])
 def inventory():
-    utils.collect_and_write_inventory()
-    return render_template('inventory.html',message="Inventory Collection Started")
+    sched.add_date_job(
+        utils.collect_and_write_inventory,
+        date=datetime.datetime.now()+datetime.timedelta(seconds=10)
+    )
+    return render_template('inventory.html',message="Inventory Collection Background Job Started")
 
 @app.route('/configuration', methods=['GET'])
 def collectionsetup():
+    liveconfig = shelve.open(config.systemconfig['live_config_file'], writeback=True)
+    if len(liveconfig) != 0:
+        logger.info("Clearing existing live_config_file: %s" % config.systemconfig['live_config_file'])
+        liveconfig.clear()
+    liveconfig.sync()
+    liveconfig.close()
     return render_template('collectionsetup.html')
 
 
 @app.route('/pushconfig', methods=['POST'])
 def pushconfig():
-    config.clear()
-    config.set_config('vcenter_user',request.form['username'])
-    config.set_config('vcenter_pwd',request.form['password'])
-    config.set_config('run_count' , int(request.form['runcount']))
-    config.set_config('vcenter_host' , request.form['vcenter'])
-    config.set_config('interval' , int(request.form['interval']))
-    config.set_config('data_dir','/tmp')
-
-    return render_template('pushconfig.html',message="Configuration Saved to Database")
+    try:
+        liveconfig = shelve.open(config.systemconfig['live_config_file'], writeback=True)
+        liveconfig['vcenter_user'] = request.form['username']
+        liveconfig['vcenter_pwd'] = request.form['password']
+        liveconfig['run_count'] = int(request.form['runcount'])
+        liveconfig['vcenter_host'] =request.form['vcenter']
+        liveconfig['interval'] =int(request.form['interval'])
+        liveconfig['data_dir'] = config.systemconfig['data_dir']
+        logger.debug(liveconfig)
+        liveconfig.close()
+        return render_template('pushconfig.html',message="Configuration Saved to Database")
+    except Exception, e:
+        return "Incorrect entry, please try again"
 
 
 @app.route('/runperf/<requestedtype>', methods=['GET'])
 def runperf(requestedtype):
-    r.set("runs_completed","0")
+    liveconfig = shelve.open(config.systemconfig['live_config_file'], writeback=True)
+    liveconfig["runs_completed"] = 0
     sched.add_interval_job(
         utils.collect_and_write_data,
         args=[requestedtype],
-        seconds=int(config.get_config('interval')),
-        max_runs=int(config.get_config('run_count')),
+        seconds=liveconfig['interval'],
+        max_runs=liveconfig['run_count'],
         start_date=datetime.datetime.now(),
-        jobstore="redis",
     )
 
     return redirect(url_for('status'))
@@ -137,7 +156,9 @@ def runperf(requestedtype):
 
 
 def sizeof_fmt(num):
-    for x in ['bytes', 'KB', 'MB', 'GB']:
+    if type(num) == type(""):
+        return "Error"
+    for x in ['B', 'KB', 'MB', 'GB']:
         if num < 1024.0 and num > -1024.0:
             return "%3.1f%s" % (num, x)
         num /= 1024.0

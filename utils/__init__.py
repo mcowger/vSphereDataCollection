@@ -9,16 +9,10 @@ import gzip
 from pyVim.connect import SmartConnect, Disconnect
 import pyVmomi
 from pyVmomi import vim
-from progress.bar import Bar
-from RedisConfigHelper import RedisConfigHelper
+
 import logging
-from redis import StrictRedis
-from RedisConfigHelper import RedisConfigHelper
-from apscheduler.scheduler import Scheduler
-from pprint import pformat,pprint
-import jsonpickle
-
-
+import shelve
+import config
 
 si = None
 pm = None
@@ -27,18 +21,8 @@ allCounters = None
 
 
 logger = logging.getLogger(__name__)
-
-
-
 relevant_metrics = ['datastore', 'virtualDisk', 'disk', 'cpu', 'mem']
-
 _all_objects = {}
-
-config = RedisConfigHelper()
-
-
-
-
 
 class MyJSONEncoder(json.JSONEncoder):
     """A custom JSONEncoder class that knows how to encode core custom
@@ -76,7 +60,6 @@ class MyJSONEncoder(json.JSONEncoder):
             # For anything else
             return "__{}__".format(obj.__class__.__name__)
 
-
 def json2xml(json_obj, line_padding=""):
     result_list = list()
 
@@ -99,16 +82,15 @@ def json2xml(json_obj, line_padding=""):
 
     return "%s%s" % (line_padding, json_obj)
 
-
-
 def collect_and_write_inventory():
-    config = RedisConfigHelper()
-    r = StrictRedis()
+    import config
+    liveconfig = shelve.open(config.systemconfig['live_config_file'], writeback=True)
     connect(
-        host=config.get_config('vcenter_host'),
-        user=config.get_config('vcenter_user'),
-        pwd=config.get_config('vcenter_pwd')
+        host=liveconfig['vcenter_host'],
+        user=liveconfig['vcenter_user'],
+        pwd=liveconfig['vcenter_pwd'],
     )
+
 
     inventory = {}
     inventory['vm'] = [item.summary for item in _all_objects['vim.VirtualMachine']]
@@ -120,7 +102,7 @@ def collect_and_write_inventory():
     inventory['datastore'] = [item.summary for item in _all_objects['vim.Datastore']]
 
 
-    with gzip.open(config.get_config('data_dir')+ '/vsphereinventory.gz','w') as output:
+    with gzip.open(liveconfig['data_dir']+ '/vsphereinventory.gz','w') as output:
         jsondata = json.loads(
             json.dumps(inventory, cls=MyJSONEncoder, indent=4)
         )
@@ -130,38 +112,33 @@ def collect_and_write_inventory():
         #print json2xml(json.dumps(inventory, cls=MyJSONEncoder, indent=4))
         output.write(json2xml(jsondata).encode('ascii','ignore'))
 
+    liveconfig.close()
     si = None
     pm = None
-    r = None
+
     allCounters = None
 
-
-
 def collect_and_write_data(objtype,limit=None):
-    config = RedisConfigHelper()
-    r = StrictRedis()
+    liveconfig = shelve.open(config.systemconfig['live_config_file'], writeback=True)
     connect(
-        host=config.get_config('vcenter_host'),
-        user=config.get_config('vcenter_user'),
-        pwd=config.get_config('vcenter_pwd')
+        host=liveconfig['vcenter_host'],
+        user=liveconfig['vcenter_user'],
+        pwd=liveconfig['vcenter_pwd']
     )
     query_specs = build_perf_request_for_type(objtype, limit)
     results = get_perf(query_specs)
     datadict = build_datasets_from_results(results)
-    writedata(datadict, config.get_config('data_dir'))
-    r.incr("runs_completed")
+    writedata(datadict, liveconfig['data_dir'])
+    liveconfig["runs_completed"] += 1
     si = None
     pm = None
-    r = None
     allCounters = None
 
     #return "Task %s completed" % task_id
 
-
 def get_perf(query_specs,group_size=10):
 
 
-    bar = Bar('Collecting\t', suffix='>%(percent)d%% ETA: %(eta)ds ', max=len(query_specs) / group_size)
     logger.info("Submitting %s requests in groups of %d" % (len(query_specs),group_size))
     results = []
     group_count = 0
@@ -172,52 +149,49 @@ def get_perf(query_specs,group_size=10):
         group_count += 1
         logger.debug("Submitting group: %d" % group_count)
         results += pm.QueryPerf([x for x in list(group) if x != None])
-        bar.next()
 
-    bar.finish()
+
     return results
 
 def build_perf_request_for_type(obj_type,limit=None):
     query_specs = []
     entities = get_objects_by_type(obj_type)
-    bar = Bar('Inventory\t', suffix='>%(percent)d%% ETA: %(eta)ds ', max=len(entities))
+
 
     runcount = 0
     for entity in entities:
         runcount += 1
         if limit is not None and runcount > limit:
             return query_specs
-        bar.next()
+
         query_specs.append(build_query_spec_for_entity(entity))
-    bar.finish()
+
     return query_specs
 
 def build_datasets_from_results(results):
     all_data = {}
-    bar = Bar('Processing Data\t', suffix='>%(percent)d%% ETA: %(eta)ds ', max=len(results))
+
     for entity_result in results:
 
         logger.debug("Processing result from entity: %s" % entity_result.entity.name)
 
         trash,timestamp = entity_result.sampleInfoCSV.split(',')
         if not all_data.has_key(timestamp): all_data[timestamp] = []
-        bar.next()
 
-        resultbar = Bar('Processing Entity Results: ' + entity_result.entity.name + '\t\t', suffix='%(percent)d%% ETA: %(eta)ds ', max=len(entity_result.value))
         for result in entity_result.value:
             counterId = result.id.counterId
             counterInfo = [x for x in allCounters if x.key == counterId][0]
             combined_name = ".".join([counterInfo.groupInfo.key, counterInfo.nameInfo.key, result.id.instance]).rstrip('.')
             value = result.value
             all_data[timestamp].append({'entity':entity_result.entity.name, 'metric':combined_name,'value':value})
-            resultbar.next()
+
 
             #logger.debug("%s = %s" % (combined_name,value))
             #logger.debug(value)
             logger.debug("Entity %s:%s = %s" % (entity_result.entity.name,combined_name, value) )
-        resultbar.finish()
 
-    bar.finish()
+
+
     return all_data
 
 def build_query_spec_for_entity(entity):
@@ -241,7 +215,6 @@ def build_query_spec_for_entity(entity):
     query_spec.metricId = metrics_to_get
     return query_spec
 
-
 def get_objects_by_type(obj_type):
     """
 
@@ -251,8 +224,6 @@ def get_objects_by_type(obj_type):
     :return: [obj_type]
     """
     return _all_objects["vim." + obj_type]
-
-
 
 def grouper(n, iterable, fillvalue=None):
     """grouper(3, 'ABCDEFG', 'x') --> ABC DEF Gxx"""
@@ -280,8 +251,6 @@ def extract_headers(datadict):
     logger.info(headers)
     return headers
 
-
-
 def connect(*args, **kwargs):
     logger.info("Connecting to vCenter")
     global si
@@ -296,14 +265,10 @@ def connect(*args, **kwargs):
     logger.debug(si.content.rootFolder)
     get_subs(si.content.rootFolder)
     allCounters = pm.perfCounter
-    r = StrictRedis()
 
 def disconnect():
     logger.info("Disconnecting from vCenter host")
     Disconnect(si)
-
-
-
 
 def get_subs(thething, level=0):
     if level == 0:
@@ -351,5 +316,3 @@ def get_subs(thething, level=0):
         logger.debug("Added object %s" % thething)
 
     return _all_objects
-
-
